@@ -195,13 +195,16 @@ let logs = [];
 let msgHist = {};
   
 const STORAGE = {
-  TASKS:  "TODD_TEST_TASKS_V1",
-  TOUCHED:"TODD_TEST_TIER_TOUCHED_V1",
-  NAGGED:"TODD_TEST_TIER_NAGGEDDATE_V1",
-  SNOOZE:"TODD_TEST_TIER_SNOOZE_V1",
-  LOGS:  "TODD_TEST_SHAME_LOG_V1",
-  MSGHIST:"TODD_TEST_MSG_HIST_V1"
+  TASKS:  "TH41_PLAN_TASKS_V1",
+  TOUCHED:"TH41_PLAN_TIER_TOUCHED_V1",
+  NAGGED:"TH41_PLAN_TIER_NAGGEDDATE_V1",
+  SNOOZE:"TH41_PLAN_TIER_SNOOZE_V1",
+  LOGS:  "TH41_PLAN_LOG_V1",
+  MSGHIST:"TH41_PLAN_MSG_HIST_V1"
 };
+
+// This is the separate Apps Script attached to Todd's personal TH41 Sheet.
+const TH41_BACKEND_URL = "https://script.google.com/macros/s/AKfycbx9nruVEhEGyygWwdAknNRRvDCC7vIVnTxtWUq44_NCqoV9t3sDhAVP3CMmEAsbYA2XTQ/exec";
 
 const DAY_MS = 24*60*60*1000;
 
@@ -261,35 +264,61 @@ function randPick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 /* =========================
    STATE LOAD
    ========================= */
-async function loadFromServer(){
+function readStored(key, fallback){
   try{
-    const res = await fetch("https://script.google.com/macros/s/AKfycbyCVOwhCtWJX2X7bQE9dVNKgtVt-TBt8HTioqFf9Xk1EY-XM8joKX9GS5a0gAzvwouZgw/exec?action=getAll");
-
-    const data = await res.json();
-
-if (Array.isArray(data)) {
-  tasks = data;
-}
-
-
-    render();
-
+    const value = localStorage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
   } catch(err){
-    console.error("Fetch failed:", err);
-
-    tasks = DEFAULT_TASKS.map((t, idx)=>({
-      id: "t_"+Date.now()+"_"+idx,
-      tier: t[0],
-      text: t[1],
-      status: "ready",
-      createdAt: Date.now()
-    }));
-
-    render();
+    return fallback;
   }
 }
 
+function applyState(state){
+  tasks = Array.isArray(state && state.tasks) ? state.tasks : [];
+  touched = (state && state.touched) || {};
+  naggedDate = (state && state.naggedDate) || {};
+  snoozeUntil = (state && state.snoozeUntil) || {};
+  logs = Array.isArray(state && state.logs) ? state.logs : [];
+  msgHist = (state && state.msgHist) || {};
+}
 
+function currentState(){
+  return { tasks, touched, naggedDate, snoozeUntil, logs, msgHist };
+}
+
+function loadLocal(){
+  applyState({
+    tasks: readStored(STORAGE.TASKS, []),
+    touched: readStored(STORAGE.TOUCHED, {}),
+    naggedDate: readStored(STORAGE.NAGGED, {}),
+    snoozeUntil: readStored(STORAGE.SNOOZE, {}),
+    logs: readStored(STORAGE.LOGS, []),
+    msgHist: readStored(STORAGE.MSGHIST, {})
+  });
+  render();
+}
+
+async function loadFromPersonalSheet(){
+  try{
+    const response = await fetch(TH41_BACKEND_URL + "?action=getAll", { cache: "no-store" });
+    const state = await response.json();
+    applyState(state);
+    saveLocal();
+    render();
+  } catch(error){
+    console.warn("Personal TH41 Sheet unavailable; using this device's saved copy.", error);
+    loadLocal();
+  }
+}
+
+function saveLocal(){
+  localStorage.setItem(STORAGE.TASKS, JSON.stringify(tasks));
+  localStorage.setItem(STORAGE.TOUCHED, JSON.stringify(touched));
+  localStorage.setItem(STORAGE.NAGGED, JSON.stringify(naggedDate));
+  localStorage.setItem(STORAGE.SNOOZE, JSON.stringify(snoozeUntil));
+  localStorage.setItem(STORAGE.LOGS, JSON.stringify(logs));
+  localStorage.setItem(STORAGE.MSGHIST, JSON.stringify(msgHist));
+}
 
 // Bootstrap tasks once if empty
 if(!tasks || !Array.isArray(tasks) || tasks.length === 0){
@@ -313,15 +342,12 @@ if(!tasks || !Array.isArray(tasks) || tasks.length === 0){
   });
 })();
 
-async function saveAll(){
-await fetch("https://script.google.com/macros/s/AKfycbyCVOwhCtWJX2X7bQE9dVNKgtVt-TBt8HTioqFf9Xk1EY-XM8joKX9GS5a0gAzvwouZgw/exec", {
-
+function saveAll(){
+  saveLocal();
+  fetch(TH41_BACKEND_URL, {
     method: "POST",
-    body: new URLSearchParams({
-      action: "saveAll",
-      data: JSON.stringify({ tasks })
-    })
-  });
+    body: new URLSearchParams({ data: JSON.stringify(currentState()) })
+  }).catch(error => console.warn("Could not save to personal TH41 Sheet.", error));
 }
 
 /* =========================
@@ -702,7 +728,7 @@ modal.addEventListener("click", (e)=>{
 /* =========================
    REMINDER TICK (keep it alive)
    ========================= */
-loadFromServer();
+loadFromPersonalSheet();
 // Re-check every 60 seconds while the page is open
 setInterval(()=>{ buildSavageBanner(); }, 60000);
 </script>
